@@ -14,12 +14,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/DataDog/datadog-lambda-go/internal/extension"
-	"github.com/DataDog/datadog-lambda-go/internal/logger"
-	"github.com/DataDog/datadog-lambda-go/internal/version"
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+
+	"github.com/DataDog/datadog-lambda-go/internal/extension"
+	"github.com/DataDog/datadog-lambda-go/internal/logger"
+	"github.com/DataDog/datadog-lambda-go/internal/version"
 )
 
 type (
@@ -29,6 +30,7 @@ type (
 		mergeXrayTraces       bool
 		extensionManager      *extension.ExtensionManager
 		traceContextExtractor ContextExtractor
+		tracerOptions         []tracer.StartOption
 	}
 
 	// Config gives options for how the Listener should work
@@ -36,6 +38,7 @@ type (
 		DDTraceEnabled        bool
 		MergeXrayTraces       bool
 		TraceContextExtractor ContextExtractor
+		TracerOptions         []tracer.StartOption
 	}
 )
 
@@ -52,6 +55,7 @@ func MakeListener(config Config, extensionManager *extension.ExtensionManager) L
 		mergeXrayTraces:       config.MergeXrayTraces,
 		extensionManager:      extensionManager,
 		traceContextExtractor: config.TraceContextExtractor,
+		tracerOptions:         config.TracerOptions,
 	}
 }
 
@@ -64,10 +68,13 @@ func (l *Listener) HandlerStarted(ctx context.Context, msg json.RawMessage) cont
 	ctx, _ = contextWithRootTraceContext(ctx, msg, l.mergeXrayTraces, l.traceContextExtractor)
 
 	if !tracerInitialized {
-		tracer.Start(
+		opts := append([]tracer.StartOption{
 			tracer.WithService("aws.lambda"),
 			tracer.WithLambdaMode(!l.extensionManager.IsExtensionRunning()),
 			tracer.WithGlobalTag("_dd.origin", "lambda"),
+		}, l.tracerOptions...)
+		tracer.Start(
+			opts...
 		)
 		tracerInitialized = true
 	}
