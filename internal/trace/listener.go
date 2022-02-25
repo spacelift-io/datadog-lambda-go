@@ -12,15 +12,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
-
-	"github.com/aws/aws-lambda-go/lambdacontext"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 
 	"github.com/DataDog/datadog-lambda-go/internal/extension"
 	"github.com/DataDog/datadog-lambda-go/internal/logger"
 	"github.com/DataDog/datadog-lambda-go/internal/version"
+	"github.com/aws/aws-lambda-go/lambdacontext"
+	"go.opentelemetry.io/otel"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
+	ddotel "gopkg.in/DataDog/dd-trace-go.v1/ddtrace/opentelemetry"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 type (
@@ -29,6 +31,7 @@ type (
 		ddTraceEnabled           bool
 		mergeXrayTraces          bool
 		universalInstrumentation bool
+		otelTracerEnabled        bool
 		extensionManager         *extension.ExtensionManager
 		traceContextExtractor    ContextExtractor
 		tracerOptions            []tracer.StartOption
@@ -39,6 +42,7 @@ type (
 		DDTraceEnabled           bool
 		MergeXrayTraces          bool
 		UniversalInstrumentation bool
+		OtelTracerEnabled        bool
 		TraceContextExtractor    ContextExtractor
 		TracerOptions            []tracer.StartOption
 	}
@@ -56,6 +60,7 @@ func MakeListener(config Config, extensionManager *extension.ExtensionManager) L
 		ddTraceEnabled:           config.DDTraceEnabled,
 		mergeXrayTraces:          config.MergeXrayTraces,
 		universalInstrumentation: config.UniversalInstrumentation,
+		otelTracerEnabled:        config.OtelTracerEnabled,
 		extensionManager:         extensionManager,
 		traceContextExtractor:    config.TraceContextExtractor,
 		tracerOptions:            config.TracerOptions,
@@ -75,13 +80,27 @@ func (l *Listener) HandlerStarted(ctx context.Context, msg json.RawMessage) cont
 	ctx, _ = contextWithRootTraceContext(ctx, msg, l.mergeXrayTraces, l.traceContextExtractor)
 
 	if !tracerInitialized {
+		serviceName := os.Getenv("DD_SERVICE")
+		if serviceName == "" {
+			serviceName = "aws.lambda"
+		}
+		extensionNotRunning := !l.extensionManager.IsExtensionRunning()
 		opts := append([]tracer.StartOption{
-			tracer.WithService("aws.lambda"),
-			tracer.WithLambdaMode(!l.extensionManager.IsExtensionRunning()),
+			tracer.WithService(serviceName),
+			tracer.WithLambdaMode(extensionNotRunning),
 			tracer.WithGlobalTag("_dd.origin", "lambda"),
 			tracer.WithSendRetries(2),
 		}, l.tracerOptions...)
-		tracer.Start(opts...)
+		if l.otelTracerEnabled {
+			provider := ddotel.NewTracerProvider(
+				opts...,
+			)
+			otel.SetTracerProvider(provider)
+		} else {
+			tracer.Start(
+				opts...,
+			)
+		}
 		tracerInitialized = true
 	}
 
@@ -99,8 +118,10 @@ func (l *Listener) HandlerFinished(ctx context.Context, err error) {
 	if functionExecutionSpan != nil {
 		functionExecutionSpan.Finish(tracer.WithError(err))
 
+		finishConfig := ddtrace.FinishConfig{Error: err}
+
 		if l.universalInstrumentation && l.extensionManager.IsExtensionRunning() {
-			l.extensionManager.SendEndInvocationRequest(ctx, functionExecutionSpan, err)
+			l.extensionManager.SendEndInvocationRequest(ctx, functionExecutionSpan, finishConfig)
 		}
 	}
 
