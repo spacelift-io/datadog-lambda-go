@@ -81,9 +81,7 @@ func (l *Listener) HandlerStarted(ctx context.Context, msg json.RawMessage) cont
 			tracer.WithGlobalTag("_dd.origin", "lambda"),
 			tracer.WithSendRetries(2),
 		}, l.tracerOptions...)
-		tracer.Start(
-			opts...,
-		)
+		tracer.Start(opts...)
 		tracerInitialized = true
 	}
 
