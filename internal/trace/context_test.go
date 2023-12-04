@@ -11,13 +11,12 @@ package trace
 import (
 	"context"
 	"encoding/json"
-	"io/ioutil"
+	"os"
 	"testing"
 
+	"github.com/DataDog/datadog-lambda-go/internal/extension"
 	"github.com/aws/aws-xray-sdk-go/header"
-
 	"github.com/aws/aws-xray-sdk-go/xray"
-
 	"github.com/stretchr/testify/assert"
 )
 
@@ -41,24 +40,40 @@ func mockLambdaXRayTraceContext(ctx context.Context, traceID, parentID string, s
 		AdditionalData:   make(TraceContext),
 	}
 	headerString := traceHeader.String()
+	//nolint
 	return context.WithValue(ctx, xray.LambdaTraceHeaderKey, headerString)
 }
 
+func mockTraceContext(traceID, parentID, samplingPriority string) context.Context {
+	ctx := context.Background()
+	if traceID != "" {
+		ctx = context.WithValue(ctx, extension.DdTraceId, traceID)
+	}
+	if parentID != "" {
+		ctx = context.WithValue(ctx, extension.DdParentId, parentID)
+	}
+	if samplingPriority != "" {
+		ctx = context.WithValue(ctx, extension.DdSamplingPriority, samplingPriority)
+	}
+	return ctx
+}
+
 func loadRawJSON(t *testing.T, filename string) *json.RawMessage {
-	bytes, err := ioutil.ReadFile(filename)
+	bytes, err := os.ReadFile(filename)
 	if err != nil {
 		assert.Fail(t, "Couldn't find JSON file")
 		return nil
 	}
 	msg := json.RawMessage{}
-	msg.UnmarshalJSON(bytes)
+	err = msg.UnmarshalJSON(bytes)
+	assert.NoError(t, err)
 	return &msg
 }
 func TestGetDatadogTraceContextForTraceMetadataNonProxyEvent(t *testing.T) {
 	ctx := mockLambdaXRayTraceContext(context.Background(), mockXRayTraceID, mockXRayEntityID, true)
 	ev := loadRawJSON(t, "../testdata/apig-event-with-headers.json")
 
-	headers, ok := getTraceContext(getHeadersFromEventHeaders(ctx, *ev))
+	headers, ok := getTraceContext(ctx, getHeadersFromEventHeaders(ctx, *ev))
 	assert.True(t, ok)
 
 	expected := TraceContext{
@@ -73,7 +88,7 @@ func TestGetDatadogTraceContextForTraceMetadataWithMixedCaseHeaders(t *testing.T
 	ctx := mockLambdaXRayTraceContext(context.Background(), mockXRayTraceID, mockXRayEntityID, true)
 	ev := loadRawJSON(t, "../testdata/non-proxy-with-mixed-case-headers.json")
 
-	headers, ok := getTraceContext(getHeadersFromEventHeaders(ctx, *ev))
+	headers, ok := getTraceContext(ctx, getHeadersFromEventHeaders(ctx, *ev))
 	assert.True(t, ok)
 
 	expected := TraceContext{
@@ -88,7 +103,7 @@ func TestGetDatadogTraceContextForTraceMetadataWithMissingSamplingPriority(t *te
 	ctx := mockLambdaXRayTraceContext(context.Background(), mockXRayTraceID, mockXRayEntityID, true)
 	ev := loadRawJSON(t, "../testdata/non-proxy-with-missing-sampling-priority.json")
 
-	headers, ok := getTraceContext(getHeadersFromEventHeaders(ctx, *ev))
+	headers, ok := getTraceContext(ctx, getHeadersFromEventHeaders(ctx, *ev))
 	assert.True(t, ok)
 
 	expected := TraceContext{
@@ -103,7 +118,7 @@ func TestGetDatadogTraceContextForInvalidData(t *testing.T) {
 	ctx := mockLambdaXRayTraceContext(context.Background(), mockXRayTraceID, mockXRayEntityID, true)
 	ev := loadRawJSON(t, "../testdata/invalid.json")
 
-	_, ok := getTraceContext(getHeadersFromEventHeaders(ctx, *ev))
+	_, ok := getTraceContext(ctx, getHeadersFromEventHeaders(ctx, *ev))
 	assert.False(t, ok)
 }
 
@@ -111,8 +126,65 @@ func TestGetDatadogTraceContextForMissingData(t *testing.T) {
 	ctx := mockLambdaXRayTraceContext(context.Background(), mockXRayTraceID, mockXRayEntityID, true)
 	ev := loadRawJSON(t, "../testdata/non-proxy-no-headers.json")
 
-	_, ok := getTraceContext(getHeadersFromEventHeaders(ctx, *ev))
+	_, ok := getTraceContext(ctx, getHeadersFromEventHeaders(ctx, *ev))
 	assert.False(t, ok)
+}
+
+func TestGetDatadogTraceContextFromContextObject(t *testing.T) {
+	testcases := []struct {
+		traceID          string
+		parentID         string
+		samplingPriority string
+		expectTC         TraceContext
+		expectOk         bool
+	}{
+		{
+			"trace",
+			"parent",
+			"sampling",
+			TraceContext{
+				"x-datadog-trace-id":          "trace",
+				"x-datadog-parent-id":         "parent",
+				"x-datadog-sampling-priority": "sampling",
+			},
+			true,
+		},
+		{
+			"",
+			"parent",
+			"sampling",
+			TraceContext{},
+			false,
+		},
+		{
+			"trace",
+			"",
+			"sampling",
+			TraceContext{},
+			false,
+		},
+		{
+			"trace",
+			"parent",
+			"",
+			TraceContext{
+				"x-datadog-trace-id":          "trace",
+				"x-datadog-parent-id":         "parent",
+				"x-datadog-sampling-priority": "1",
+			},
+			true,
+		},
+	}
+
+	ev := loadRawJSON(t, "../testdata/non-proxy-no-headers.json")
+	for _, test := range testcases {
+		t.Run(test.traceID+test.parentID+test.samplingPriority, func(t *testing.T) {
+			ctx := mockTraceContext(test.traceID, test.parentID, test.samplingPriority)
+			tc, ok := getTraceContext(ctx, getHeadersFromEventHeaders(ctx, *ev))
+			assert.Equal(t, test.expectTC, tc)
+			assert.Equal(t, test.expectOk, ok)
+		})
+	}
 }
 
 func TestConvertXRayTraceID(t *testing.T) {

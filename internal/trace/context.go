@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/DataDog/datadog-lambda-go/internal/extension"
 	"github.com/DataDog/datadog-lambda-go/internal/logger"
 	"github.com/aws/aws-xray-sdk-go/header"
 	"github.com/aws/aws-xray-sdk-go/xray"
@@ -47,7 +48,7 @@ var DefaultTraceExtractor = getHeadersFromEventHeaders
 // contextWithRootTraceContext uses the incoming event and context object payloads to determine
 // the root TraceContext and then adds that TraceContext to the context object.
 func contextWithRootTraceContext(ctx context.Context, ev json.RawMessage, mergeXrayTraces bool, extractor ContextExtractor) (context.Context, error) {
-	datadogTraceContext, gotDatadogTraceContext := getTraceContext(extractor(ctx, ev))
+	datadogTraceContext, gotDatadogTraceContext := getTraceContext(ctx, extractor(ctx, ev))
 
 	xrayTraceContext, errGettingXrayContext := convertXrayTraceContextFromLambdaContext(ctx)
 	if errGettingXrayContext != nil {
@@ -55,7 +56,10 @@ func contextWithRootTraceContext(ctx context.Context, ev json.RawMessage, mergeX
 	}
 
 	if gotDatadogTraceContext && errGettingXrayContext == nil {
-		createDummySubsegmentForXrayConverter(ctx, datadogTraceContext)
+		err := createDummySubsegmentForXrayConverter(ctx, datadogTraceContext)
+		if err != nil {
+			logger.Error(fmt.Errorf("Couldn't create segment: %v", err))
+		}
 	}
 
 	if !mergeXrayTraces {
@@ -123,21 +127,36 @@ func createDummySubsegmentForXrayConverter(ctx context.Context, traceCtx TraceCo
 	return nil
 }
 
-func getTraceContext(context map[string]string) (TraceContext, bool) {
+func getTraceContext(ctx context.Context, headers map[string]string) (TraceContext, bool) {
 	tc := TraceContext{}
 
-	traceID, ok := context[traceIDHeader]
-	if !ok {
+	traceID := headers[traceIDHeader]
+	if traceID == "" {
+		if val, ok := ctx.Value(extension.DdTraceId).(string); ok {
+			traceID = val
+		}
+	}
+	if traceID == "" {
 		return tc, false
 	}
 
-	parentID, ok := context[parentIDHeader]
-	if !ok {
+	parentID := headers[parentIDHeader]
+	if parentID == "" {
+		if val, ok := ctx.Value(extension.DdParentId).(string); ok {
+			parentID = val
+		}
+	}
+	if parentID == "" {
 		return tc, false
 	}
 
-	samplingPriority, ok := context[samplingPriorityHeader]
-	if !ok {
+	samplingPriority := headers[samplingPriorityHeader]
+	if samplingPriority == "" {
+		if val, ok := ctx.Value(extension.DdSamplingPriority).(string); ok {
+			samplingPriority = val
+		}
+	}
+	if samplingPriority == "" {
 		samplingPriority = "1" //sampler-keep
 	}
 
@@ -232,11 +251,7 @@ func convertHexIDToUint64(hexNumber string) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("couldn't convert hex to uint64: %v", err)
 	}
-
-	var id uint64
-	id = binary.BigEndian.Uint64(ba) // TODO: Verify that this is correct
-
-	return id, nil
+	return binary.BigEndian.Uint64(ba), nil // TODO: Verify that this is correct
 }
 
 // Converts an X-Ray entity ID (hex) to a Datadog parent id (uint64).

@@ -19,7 +19,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
 
-	"github.com/DataDog/datadog-go/statsd"
+	"github.com/DataDog/datadog-go/v5/statsd"
 	"github.com/DataDog/datadog-lambda-go/internal/extension"
 	"github.com/DataDog/datadog-lambda-go/internal/logger"
 	"github.com/DataDog/datadog-lambda-go/internal/version"
@@ -45,7 +45,7 @@ type (
 		ShouldUseLogForwarder       bool
 		BatchInterval               time.Duration
 		EnhancedMetrics             bool
-		HttpClientTimeout           time.Duration
+		HTTPClientTimeout           time.Duration
 		CircuitBreakerInterval      time.Duration
 		CircuitBreakerTimeout       time.Duration
 		CircuitBreakerTotalFailures uint32
@@ -67,10 +67,10 @@ func MakeListener(config Config, extensionManager *extension.ExtensionManager) L
 		apiKey:            config.APIKey,
 		decrypter:         MakeKMSDecrypter(),
 		kmsAPIKey:         config.KMSAPIKey,
-		httpClientTimeout: config.HttpClientTimeout,
+		httpClientTimeout: config.HTTPClientTimeout,
 	})
-	if config.HttpClientTimeout <= 0 {
-		config.HttpClientTimeout = defaultHttpClientTimeout
+	if config.HTTPClientTimeout <= 0 {
+		config.HTTPClientTimeout = defaultHttpClientTimeout
 	}
 	if config.CircuitBreakerInterval <= 0 {
 		config.CircuitBreakerInterval = defaultCircuitBreakerInterval
@@ -106,9 +106,14 @@ func MakeListener(config Config, extensionManager *extension.ExtensionManager) L
 	}
 }
 
+// canSendMetrics reports whether l can send metrics.
+func (l *Listener) canSendMetrics() bool {
+	return l.isAgentRunning || l.apiClient.apiKey != "" || l.config.KMSAPIKey != "" || l.config.ShouldUseLogForwarder
+}
+
 // HandlerStarted adds metrics service to the context
 func (l *Listener) HandlerStarted(ctx context.Context, msg json.RawMessage) context.Context {
-	if l.apiClient.apiKey == "" && l.config.KMSAPIKey == "" && !l.config.ShouldUseLogForwarder {
+	if !l.canSendMetrics() {
 		logger.Error(fmt.Errorf("datadog api key isn't set, won't be able to send metrics"))
 	}
 
@@ -159,7 +164,10 @@ func (l *Listener) AddDistributionMetric(metric string, value float64, timestamp
 	tags = append(tags, getRuntimeTag())
 
 	if l.isAgentRunning {
-		l.statsdClient.Distribution(metric, value, tags, 1)
+		err := l.statsdClient.Distribution(metric, value, tags, 1)
+		if err != nil {
+			logger.Error(fmt.Errorf("could not send metric %s: %s", metric, err.Error()))
+		}
 		return
 	}
 

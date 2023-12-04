@@ -12,12 +12,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"reflect"
+	"testing"
+
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/stretchr/testify/assert"
-	"io/ioutil"
-	"reflect"
-	"testing"
 )
 
 type (
@@ -57,7 +58,7 @@ func runHandlerWithJSON(t *testing.T, filename string, handler interface{}) (*mo
 
 func runHandlerInterfaceWithJSON(t *testing.T, filename string, handler lambda.Handler) (*mockHandlerListener, []byte, error) {
 	ctx := context.Background()
-	payload, err := ioutil.ReadFile(filename)
+	payload, err := os.ReadFile(filename)
 	if err != nil {
 		assert.Fail(t, "Couldn't find JSON file")
 		return nil, nil, nil
@@ -71,13 +72,14 @@ func runHandlerInterfaceWithJSON(t *testing.T, filename string, handler lambda.H
 }
 
 func loadRawJSON(t *testing.T, filename string) *json.RawMessage {
-	bytes, err := ioutil.ReadFile(filename)
+	bytes, err := os.ReadFile(filename)
 	if err != nil {
 		assert.Fail(t, "Couldn't find JSON file")
 		return nil
 	}
 	msg := json.RawMessage{}
-	msg.UnmarshalJSON(bytes)
+	err = msg.UnmarshalJSON(bytes)
+	assert.NoError(t, err)
 	return &msg
 }
 

@@ -10,8 +10,10 @@ package trace
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/DataDog/datadog-lambda-go/internal/extension"
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/mocktracer"
@@ -68,12 +70,13 @@ func TestStartFunctionExecutionSpanFromXrayWithMergeEnabled(t *testing.T) {
 	lambdacontext.FunctionName = "MockFunctionName"
 	ctx = lambdacontext.NewContext(ctx, &mockLambdaContext)
 	ctx = context.WithValue(ctx, traceContextKey, traceContextFromXray)
+	//nolint
 	ctx = context.WithValue(ctx, "cold_start", true)
 
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	span := startFunctionExecutionSpan(ctx, true)
+	span, ctx := startFunctionExecutionSpan(ctx, true, false)
 	span.Finish()
 	finishedSpan := mt.FinishedSpans()[0]
 
@@ -89,6 +92,7 @@ func TestStartFunctionExecutionSpanFromXrayWithMergeEnabled(t *testing.T) {
 	assert.Equal(t, "mockfunctionname", finishedSpan.Tag("functionname"))
 	assert.Equal(t, "serverless", finishedSpan.Tag("span.type"))
 	assert.Equal(t, "xray", finishedSpan.Tag("_dd.parent_source"))
+	assert.Equal(t, fmt.Sprint(span.Context().SpanID()), ctx.Value(extension.DdSpanId).(string))
 }
 
 func TestStartFunctionExecutionSpanFromXrayWithMergeDisabled(t *testing.T) {
@@ -97,16 +101,18 @@ func TestStartFunctionExecutionSpanFromXrayWithMergeDisabled(t *testing.T) {
 	lambdacontext.FunctionName = "MockFunctionName"
 	ctx = lambdacontext.NewContext(ctx, &mockLambdaContext)
 	ctx = context.WithValue(ctx, traceContextKey, traceContextFromXray)
+	//nolint
 	ctx = context.WithValue(ctx, "cold_start", true)
 
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	span := startFunctionExecutionSpan(ctx, false)
+	span, ctx := startFunctionExecutionSpan(ctx, false, false)
 	span.Finish()
 	finishedSpan := mt.FinishedSpans()[0]
 
 	assert.Equal(t, nil, finishedSpan.Tag("_dd.parent_source"))
+	assert.Equal(t, fmt.Sprint(span.Context().SpanID()), ctx.Value(extension.DdSpanId).(string))
 }
 
 func TestStartFunctionExecutionSpanFromEventWithMergeEnabled(t *testing.T) {
@@ -115,16 +121,18 @@ func TestStartFunctionExecutionSpanFromEventWithMergeEnabled(t *testing.T) {
 	lambdacontext.FunctionName = "MockFunctionName"
 	ctx = lambdacontext.NewContext(ctx, &mockLambdaContext)
 	ctx = context.WithValue(ctx, traceContextKey, traceContextFromEvent)
+	//nolint
 	ctx = context.WithValue(ctx, "cold_start", true)
 
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	span := startFunctionExecutionSpan(ctx, true)
+	span, ctx := startFunctionExecutionSpan(ctx, true, false)
 	span.Finish()
 	finishedSpan := mt.FinishedSpans()[0]
 
 	assert.Equal(t, "xray", finishedSpan.Tag("_dd.parent_source"))
+	assert.Equal(t, fmt.Sprint(span.Context().SpanID()), ctx.Value(extension.DdSpanId).(string))
 }
 
 func TestStartFunctionExecutionSpanFromEventWithMergeDisabled(t *testing.T) {
@@ -133,14 +141,36 @@ func TestStartFunctionExecutionSpanFromEventWithMergeDisabled(t *testing.T) {
 	lambdacontext.FunctionName = "MockFunctionName"
 	ctx = lambdacontext.NewContext(ctx, &mockLambdaContext)
 	ctx = context.WithValue(ctx, traceContextKey, traceContextFromEvent)
+	//nolint
 	ctx = context.WithValue(ctx, "cold_start", true)
 
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	span := startFunctionExecutionSpan(ctx, false)
+	span, ctx := startFunctionExecutionSpan(ctx, false, false)
 	span.Finish()
 	finishedSpan := mt.FinishedSpans()[0]
 
 	assert.Equal(t, nil, finishedSpan.Tag("_dd.parent_source"))
+	assert.Equal(t, fmt.Sprint(span.Context().SpanID()), ctx.Value(extension.DdSpanId).(string))
+}
+
+func TestStartFunctionExecutionSpanWithExtension(t *testing.T) {
+	ctx := context.Background()
+
+	lambdacontext.FunctionName = "MockFunctionName"
+	ctx = lambdacontext.NewContext(ctx, &mockLambdaContext)
+	ctx = context.WithValue(ctx, traceContextKey, traceContextFromEvent)
+	//nolint
+	ctx = context.WithValue(ctx, "cold_start", true)
+
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	span, ctx := startFunctionExecutionSpan(ctx, false, true)
+	span.Finish()
+	finishedSpan := mt.FinishedSpans()[0]
+
+	assert.Equal(t, string(extension.DdSeverlessSpan), finishedSpan.Tag("resource.name"))
+	assert.Equal(t, fmt.Sprint(span.Context().SpanID()), ctx.Value(extension.DdSpanId).(string))
 }
