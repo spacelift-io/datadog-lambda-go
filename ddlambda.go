@@ -95,6 +95,8 @@ const (
 	MergeXrayTracesEnvVar = "DD_MERGE_XRAY_TRACES"
 	// UniversalInstrumentation is the environment variable that enables universal instrumentation with the DD Extension
 	UniversalInstrumentation = "DD_UNIVERSAL_INSTRUMENTATION"
+	// Initialize otel tracer provider if enabled
+	OtelTracerEnabled = "DD_TRACE_OTEL_ENABLED"
 
 	// DefaultSite to send API messages to.
 	DefaultSite = "datadoghq.com"
@@ -206,9 +208,10 @@ func InvokeDryRun(callback func(ctx context.Context), cfg *Config) (interface{},
 
 func (cfg *Config) toTraceConfig() trace.Config {
 	traceConfig := trace.Config{
-		DDTraceEnabled:           false,
+		DDTraceEnabled:           true,
 		MergeXrayTraces:          false,
-		UniversalInstrumentation: false,
+		UniversalInstrumentation: true,
+		OtelTracerEnabled:        false,
 	}
 
 	if cfg != nil {
@@ -222,16 +225,22 @@ func (cfg *Config) toTraceConfig() trace.Config {
 		traceConfig.TraceContextExtractor = trace.DefaultTraceExtractor
 	}
 
-	if !traceConfig.DDTraceEnabled {
-		traceConfig.DDTraceEnabled, _ = strconv.ParseBool(os.Getenv(DatadogTraceEnabledEnvVar))
+	if tracingEnabled, err := strconv.ParseBool(os.Getenv(DatadogTraceEnabledEnvVar)); err == nil {
+		traceConfig.DDTraceEnabled = tracingEnabled
+		// Only read the OTEL env var if DD tracing is disabled
+		if tracingEnabled {
+			if otelTracerEnabled, err := strconv.ParseBool(os.Getenv(OtelTracerEnabled)); err == nil {
+				traceConfig.OtelTracerEnabled = otelTracerEnabled
+			}
+		}
 	}
 
 	if !traceConfig.MergeXrayTraces {
 		traceConfig.MergeXrayTraces, _ = strconv.ParseBool(os.Getenv(MergeXrayTracesEnvVar))
 	}
 
-	if !traceConfig.UniversalInstrumentation {
-		traceConfig.UniversalInstrumentation, _ = strconv.ParseBool(os.Getenv(UniversalInstrumentation))
+	if universalInstrumentation, err := strconv.ParseBool(os.Getenv(UniversalInstrumentation)); err == nil {
+		traceConfig.UniversalInstrumentation = universalInstrumentation
 	}
 
 	return traceConfig
@@ -307,6 +316,10 @@ func (cfg *Config) toMetricsConfig(isExtensionRunning bool) metrics.Config {
 	}
 	if !mc.EnhancedMetrics {
 		mc.EnhancedMetrics = strings.EqualFold(enhancedMetrics, "true")
+	}
+
+	if localTest := os.Getenv("DD_LOCAL_TEST"); localTest == "1" || strings.ToLower(localTest) == "true" {
+		mc.LocalTest = true
 	}
 
 	return mc
